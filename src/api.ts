@@ -125,18 +125,44 @@ const PROFIT_CTES = `
     SELECT
       hp.player_id,
       hp.hand_id,
+      hp.room_id,
       hp.starting_stack,
       LEAD(hp.starting_stack) OVER (
-        PARTITION BY hp.player_id ORDER BY ht.ts
-      ) AS next_starting_stack
+        PARTITION BY hp.player_id, hp.room_id ORDER BY ht.ts
+      ) AS next_starting_stack,
+      LEAD(ht.ts) OVER (
+        PARTITION BY hp.player_id, hp.room_id ORDER BY ht.ts
+      ) AS next_hand_ts,
+      ht.ts AS hand_ts
     FROM pn_hand_players hp
     JOIN hand_ts ht ON ht.hand_id = hp.hand_id
   ),
+  stack_adjustments AS (
+    SELECT
+      sd.player_id,
+      sd.hand_id,
+      COALESCE(SUM(
+        CASE WHEN se.event_type IN ('cashout','quit') THEN -se.amount
+             ELSE se.amount
+        END
+      ), 0) AS net_adjustment
+    FROM stack_deltas sd
+    JOIN pn_stack_events se
+      ON  se.player_id = sd.player_id
+      AND se.room_id   = sd.room_id
+      AND se.ts > sd.hand_ts
+      AND se.ts < sd.next_hand_ts
+    WHERE sd.next_starting_stack IS NOT NULL
+    GROUP BY sd.player_id, sd.hand_id
+  ),
   stack_hand_profit AS (
-    SELECT player_id, hand_id,
-           next_starting_stack - starting_stack AS hand_net
-    FROM stack_deltas
-    WHERE next_starting_stack IS NOT NULL
+    SELECT sd.player_id, sd.hand_id,
+           sd.next_starting_stack - sd.starting_stack
+             - COALESCE(sa.net_adjustment, 0) AS hand_net
+    FROM stack_deltas sd
+    LEFT JOIN stack_adjustments sa
+      ON sa.player_id = sd.player_id AND sa.hand_id = sd.hand_id
+    WHERE sd.next_starting_stack IS NOT NULL
   ),
   merged_hand_profit AS (
     SELECT
