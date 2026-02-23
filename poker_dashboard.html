@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PokerNow Analytics Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="config.js"></script>
+<style>
+:root {
+  --bg:      #0d1117;
+  --surface: #161b22;
+  --border:  #30363d;
+  --text:    #e6edf3;
+  --muted:   #8b949e;
+  --green:   #2dba80;
+  --teal:    #1abc9c;
+  --blue:    #4a9eff;
+  --purple:  #b084f0;
+  --gold:    #f0c040;
+  --red:     #f85149;
+  --orange:  #f0883e;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace;
+  font-size: 14px;
+  min-height: 100vh;
+}
+
+/* ── Header ──────────────────────────────────────────── */
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+header h1 { font-size: 18px; font-weight: 600; color: var(--green); }
+header .subtitle { color: var(--muted); font-size: 13px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+       box-shadow: 0 0 6px var(--green); flex-shrink: 0; }
+
+/* ── Tabs ────────────────────────────────────────────── */
+nav {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  padding: 0 24px;
+}
+nav button {
+  background: none; border: none; color: var(--muted);
+  cursor: pointer; padding: 12px 16px; font-size: 14px;
+  border-bottom: 2px solid transparent; transition: all .15s;
+}
+nav button:hover { color: var(--text); }
+nav button.active { color: var(--green); border-bottom-color: var(--green); }
+
+/* ── Tab content ─────────────────────────────────────── */
+.tab { display: none; padding: 24px; }
+.tab.active { display: block; }
+
+/* ── Cards ───────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px;
+}
+
+/* ── Leaderboard ─────────────────────────────────────── */
+.controls {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.controls input {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 7px 12px;
+  font-size: 13px;
+  width: 220px;
+}
+.controls input:focus { outline: 1px solid var(--green); }
+.pills { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.pill {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 12px;
+  transition: all .15s;
+}
+.pill.active { background: var(--green); border-color: var(--green); color: #000; font-weight: 600; }
+
+/* Style info toggle button */
+.info-btn {
+  background: none; border: 1px solid var(--border);
+  border-radius: 50%; color: var(--muted); cursor: pointer;
+  font-size: 11px; font-weight: 700; width: 20px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: all .15s; flex-shrink: 0;
+}
+.info-btn:hover { border-color: var(--green); color: var(--green); }
+.info-btn.open  { border-color: var(--green); color: var(--green); background: rgba(45,186,128,.1); }
+
+/* Style info panel */
+.style-guide {
+  display: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+  font-size: 13px;
+}
+.style-guide.open { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px 20px; }
+.sg-item .sg-label { font-weight: 700; margin-bottom: 3px; }
+.sg-item .sg-desc  { color: var(--muted); font-size: 12px; line-height: 1.5; }
+
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+thead th {
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .5px;
+  padding: 10px 12px;
+  text-align: left;
+  text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+thead th:hover { color: var(--text); }
+thead th.sorted { color: var(--green); }
+tbody tr {
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+  transition: background .1s;
+}
+tbody tr:hover { background: rgba(45,186,128,.06); }
+tbody td { padding: 9px 12px; font-size: 13px; white-space: nowrap; }
+
+/* ── Players tab ─────────────────────────────────────── */
+.players-layout {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 20px;
+  height: calc(100vh - 130px);
+}
+.player-list-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.player-list-panel input {
+  background: var(--bg);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 13px;
+  padding: 10px 14px;
+  width: 100%;
+}
+.player-list-panel input:focus { outline: none; }
+.player-list { flex: 1; overflow-y: auto; }
+.player-list-item {
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  padding: 10px 14px;
+  transition: background .1s;
+}
+.player-list-item:hover { background: rgba(45,186,128,.08); }
+.player-list-item.active { background: rgba(45,186,128,.15); border-left: 3px solid var(--green); }
+.player-list-item .name { font-size: 13px; font-weight: 500; }
+.player-list-item .meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+.profile-panel { overflow-y: auto; }
+.profile-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.profile-stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px;
+}
+.profile-stat .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+.profile-stat .value { font-size: 20px; font-weight: 700; }
+
+.profile-charts {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.chart-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px 20px;
+}
+.chart-card h3 { font-size: 14px; font-weight: 600; margin-bottom: 14px; color: var(--text); }
+.chart-wrap { position: relative; height: 220px; }
+
+.showdown-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.showdown-table th {
+  background: var(--bg); color: var(--muted); font-size: 11px; font-weight: 600;
+  letter-spacing: .5px; padding: 8px 10px; text-align: left; text-transform: uppercase;
+}
+.showdown-table td { border-top: 1px solid var(--border); padding: 7px 10px; }
+
+/* ── Game Lookup ─────────────────────────────────────── */
+.lookup-center { max-width: 600px; margin: 40px auto; }
+.lookup-center h2 { font-size: 20px; font-weight: 600; margin-bottom: 8px; }
+.lookup-center p  { color: var(--muted); margin-bottom: 24px; }
+.lookup-row { display: flex; gap: 10px; }
+.lookup-row input {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  flex: 1;
+  font-size: 14px;
+  padding: 10px 14px;
+}
+.lookup-row input:focus { outline: 1px solid var(--green); }
+.btn {
+  background: var(--green);
+  border: none;
+  border-radius: 6px;
+  color: #000;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 20px;
+  transition: opacity .15s;
+}
+.btn:hover { opacity: .85; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+
+.scout-status { color: var(--muted); margin-top: 20px; min-height: 24px; }
+.scout-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 14px;
+  margin-top: 24px;
+}
+.scout-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+  cursor: pointer;
+}
+.scout-card.unknown { opacity: .6; cursor: default; }
+.scout-card .sc-name { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+.scout-card .sc-badge {
+  display: inline-block;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  margin-bottom: 8px;
+}
+.badge-TAG     { background: rgba(45,186,128,.2);  color: var(--green);  }
+.badge-LAG     { background: rgba(248,81,73,.2);   color: var(--red);    }
+.badge-LAP     { background: rgba(240,192,64,.2);  color: var(--gold);   }
+.badge-Passive { background: rgba(139,148,158,.2); color: var(--muted);  }
+.badge-unknown { background: rgba(139,148,158,.15); color: var(--muted); }
+.sc-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; margin-top: 8px; }
+.sc-stat  { font-size: 12px; }
+.sc-stat .k { color: var(--muted); }
+
+/* ── Shared utils ────────────────────────────────────── */
+.style-tag     { color: var(--green);  font-weight: 600; }
+.style-lag     { color: var(--red);    font-weight: 600; }
+.style-lap     { color: var(--gold);   font-weight: 600; }
+.style-passive { color: var(--muted);  font-weight: 600; }
+.pos  { color: var(--green); }
+.neg  { color: var(--red);   }
+.placeholder {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  font-size: 15px;
+  gap: 10px;
+  height: 200px;
+  justify-content: center;
+}
+.spinner {
+  width: 32px; height: 32px;
+  border: 3px solid var(--border);
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="dot"></div>
+  <h1>PokerNow Analytics</h1>
+  <span class="subtitle">Live dashboard &middot; localhost:3456</span>
+</header>
+
+<nav>
+  <button class="active" onclick="switchTab('leaderboard',this)">Leaderboard</button>
+  <button onclick="switchTab('players',this)">Players</button>
+  <button onclick="switchTab('lookup',this)">Game Lookup</button>
+</nav>
+
+<!-- ═══════════════ LEADERBOARD ═══════════════ -->
+<div id="tab-leaderboard" class="tab active">
+  <div class="controls">
+    <input id="lb-search" placeholder="Search player&hellip;" oninput="renderLeaderboard()">
+    <div class="pills" id="lb-pills">
+      <div class="pill active" onclick="setStyleFilter('ALL',this)">ALL</div>
+      <div class="pill" onclick="setStyleFilter('TAG',this)">TAG</div>
+      <div class="pill" onclick="setStyleFilter('LAG',this)">LAG</div>
+      <div class="pill" onclick="setStyleFilter('LAP',this)">LAP</div>
+      <div class="pill" onclick="setStyleFilter('Passive',this)">Passive</div>
+      <button class="info-btn" id="style-info-btn" onclick="toggleStyleInfo()" title="What do the play styles mean?">?</button>
+    </div>
+  </div>
+
+  <!-- Style guide panel (hidden by default) -->
+  <div class="style-guide" id="style-guide">
+    <div class="sg-item">
+      <div class="sg-label style-tag">TAG — Tight Aggressive</div>
+      <div class="sg-desc">Plays few hands (VPIP &lt;35%) but bets and raises aggressively (Agg &gt;50%). Selective and disciplined — a strong, winning profile.</div>
+    </div>
+    <div class="sg-item">
+      <div class="sg-label style-lag">LAG — Loose Aggressive</div>
+      <div class="sg-desc">Plays many hands (VPIP ≥35%) and plays them aggressively (Agg &gt;50%). High variance, difficult to play against, can be very profitable.</div>
+    </div>
+    <div class="sg-item">
+      <div class="sg-label style-lap">LAP — Loose Passive</div>
+      <div class="sg-desc">Plays many hands (VPIP ≥35%) but rarely bets or raises (Agg ≤50%). Calls too much — the classic "calling station."</div>
+    </div>
+    <div class="sg-item">
+      <div class="sg-label style-passive">Passive</div>
+      <div class="sg-desc">Plays few hands (VPIP &lt;35%) and doesn't apply pressure (Agg ≤50%). Tight but not aggressive — leaves value on the table.</div>
+    </div>
+  </div>
+
+  <div class="card table-wrap">
+    <table>
+      <thead id="lb-head">
+        <tr>
+          <th onclick="sortLB('rank',event)">#</th>
+          <th onclick="sortLB('player_display',event)">Player</th>
+          <th onclick="sortLB('hands_played',event)" class="sorted">Hands</th>
+          <th onclick="sortLB('vpip_pct',event)">VPIP</th>
+          <th onclick="sortLB('pfr_pct',event)">PFR</th>
+          <th onclick="sortLB('aggression_pct',event)">Agg%</th>
+          <th onclick="sortLB('showdown_pct',event)">SD%</th>
+          <th onclick="sortLB('net_profit',event)">Net Profit</th>
+          <th onclick="sortLB('style_label',event)">Style</th>
+        </tr>
+      </thead>
+      <tbody id="lb-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════ PLAYERS ═══════════════ -->
+<div id="tab-players" class="tab">
+  <div class="players-layout">
+    <div class="player-list-panel">
+      <input id="pl-search" placeholder="Search&hellip;" oninput="filterPlayerList()">
+      <div class="player-list" id="pl-list"></div>
+    </div>
+    <div class="profile-panel" id="pl-profile">
+      <div class="placeholder"><div>Select a player from the list</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ GAME LOOKUP ═══════════════ -->
+<div id="tab-lookup" class="tab">
+  <div class="lookup-center">
+    <h2>Scout a Table</h2>
+    <p>Paste a PokerNow game URL or bare game ID to see who's sitting and their stats.</p>
+    <div class="lookup-row">
+      <input id="lookup-input"
+             placeholder="https://www.pokernow.com/games/pgl&#8230;  or  pgl&#8230;"
+             onkeydown="if(event.key==='Enter')scoutTable()">
+      <button class="btn" id="lookup-btn" onclick="scoutTable()">Scout Table</button>
+    </div>
+    <div class="scout-status" id="scout-status"></div>
+    <div class="scout-grid"  id="scout-grid"></div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────────────────
+//  Config & cache
+// ─────────────────────────────────────────────────────────
+const API = (window.POKER_CONFIG && window.POKER_CONFIG.API) || 'http://localhost:3456';
+const CACHE = new Map();   // path → { data, ts }
+const TTL   = 60_000;
+
+async function apiFetch(path) {
+  const now = Date.now();
+  const hit = CACHE.get(path);
+  if (hit && now - hit.ts < TTL) return hit.data;
+  const res = await fetch(API + path);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  CACHE.set(path, { data, ts: now });
+  return data;
+}
+
+// ─────────────────────────────────────────────────────────
+//  Chart palette & defaults
+// ─────────────────────────────────────────────────────────
+const C = {
+  GREEN:'#2dba80', TEAL:'#1abc9c', BLUE:'#4a9eff',
+  PURPLE:'#b084f0', GOLD:'#f0c040', RED:'#f85149', ORANGE:'#f0883e'
+};
+const PALETTE = [C.RED, C.GREEN, C.BLUE, C.ORANGE, C.PURPLE, C.TEAL, C.GOLD];
+
+Chart.defaults.color       = '#8b949e';
+Chart.defaults.borderColor = '#30363d';
+Chart.defaults.font.family = "-apple-system,BlinkMacSystemFont,'Segoe UI',monospace";
+
+const charts = {};
+function mkChart(id, cfg) {
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart(document.getElementById(id), cfg);
+  return charts[id];
+}
+
+function donutOpts() {
+  return {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { position: 'right', labels: { boxWidth: 12, padding: 10 } } },
+    cutout: '62%',
+  };
+}
+
+// ─────────────────────────────────────────────────────────
+//  Tab routing
+// ─────────────────────────────────────────────────────────
+const loaded = {};
+const TAB_INIT = {
+  leaderboard: loadLeaderboard,
+  players:     loadPlayerList,
+  lookup:      () => {},
+};
+
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+  if (!loaded[name]) { loaded[name] = true; TAB_INIT[name](); }
+}
+
+// ─────────────────────────────────────────────────────────
+//  LEADERBOARD
+// ─────────────────────────────────────────────────────────
+let lbData        = [];
+let lbSortKey     = 'hands_played';
+let lbSortAsc     = false;
+let lbStyleFilter = 'ALL';
+
+async function loadLeaderboard() {
+  lbData = await apiFetch('/api/players');
+  allPlayers = lbData;  // share with players tab
+  renderLeaderboard();
+}
+
+function toggleStyleInfo() {
+  const guide = document.getElementById('style-guide');
+  const btn   = document.getElementById('style-info-btn');
+  const open  = guide.classList.toggle('open');
+  btn.classList.toggle('open', open);
+}
+
+function setStyleFilter(style, el) {
+  lbStyleFilter = style;
+  document.querySelectorAll('#lb-pills .pill').forEach(p => p.classList.remove('active'));
+  el.classList.add('active');
+  renderLeaderboard();
+}
+
+function sortLB(key, ev) {
+  if (lbSortKey === key) lbSortAsc = !lbSortAsc;
+  else { lbSortKey = key; lbSortAsc = key === 'player_display'; }
+  document.querySelectorAll('#lb-head th').forEach(th => th.classList.remove('sorted'));
+  ev.currentTarget.classList.add('sorted');
+  renderLeaderboard();
+}
+
+function renderLeaderboard() {
+  const q = document.getElementById('lb-search').value.toLowerCase();
+  const rows = lbData
+    .filter(p => lbStyleFilter === 'ALL' || p.style_label === lbStyleFilter)
+    .filter(p => !q || p.player_display.toLowerCase().includes(q));
+
+  rows.sort((a, b) => {
+    const av = lbSortKey === 'rank' ? lbData.indexOf(a) : a[lbSortKey];
+    const bv = lbSortKey === 'rank' ? lbData.indexOf(b) : b[lbSortKey];
+    if (typeof av === 'number') return lbSortAsc ? av - bv : bv - av;
+    return lbSortAsc ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+  });
+
+  document.getElementById('lb-body').innerHTML = rows.map((p, i) => `
+    <tr onclick="openPlayerProfile('${escH(p.player_id)}')">
+      <td style="color:var(--muted)">${i + 1}</td>
+      <td style="font-weight:600">${escH(p.player_display)}</td>
+      <td>${p.hands_played}</td>
+      <td>${p.vpip_pct}%</td>
+      <td>${p.pfr_pct}%</td>
+      <td>${p.aggression_pct !== null ? p.aggression_pct + '%' : '&mdash;'}</td>
+      <td>${p.showdown_pct}%</td>
+      <td class="${p.net_profit >= 0 ? 'pos' : 'neg'}">${p.net_profit >= 0 ? '+' : ''}${p.net_profit}</td>
+      <td class="style-${p.style_label.toLowerCase()}">${p.style_label}</td>
+    </tr>
+  `).join('');
+}
+
+// ─────────────────────────────────────────────────────────
+//  PLAYERS
+// ─────────────────────────────────────────────────────────
+let allPlayers    = [];
+let activePlayerId = null;
+
+async function loadPlayerList() {
+  if (!allPlayers.length) allPlayers = await apiFetch('/api/players');
+  renderPlayerList(allPlayers);
+}
+
+function filterPlayerList() {
+  const q = document.getElementById('pl-search').value.toLowerCase();
+  renderPlayerList(q ? allPlayers.filter(p => p.player_display.toLowerCase().includes(q)) : allPlayers);
+}
+
+function renderPlayerList(players) {
+  document.getElementById('pl-list').innerHTML = players.map(p => `
+    <div class="player-list-item ${p.player_id === activePlayerId ? 'active' : ''}"
+         data-pid="${escH(p.player_id)}"
+         onclick="selectPlayer('${escH(p.player_id)}')">
+      <div class="name">${escH(p.player_display)}</div>
+      <div class="meta">${p.hands_played} hands &middot; ${p.style_label} &middot; <span class="${p.net_profit >= 0 ? 'pos' : 'neg'}">${p.net_profit >= 0 ? '+' : ''}${p.net_profit}</span></div>
+    </div>
+  `).join('');
+}
+
+async function selectPlayer(playerId) {
+  activePlayerId = playerId;
+  document.querySelectorAll('#pl-list .player-list-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.pid === playerId);
+  });
+
+  const panel = document.getElementById('pl-profile');
+  panel.innerHTML = '<div class="placeholder"><div class="spinner"></div><div>Loading&hellip;</div></div>';
+
+  try {
+    const p = await apiFetch('/api/player/' + encodeURIComponent(playerId));
+    renderProfile(panel, p);
+  } catch (e) {
+    panel.innerHTML = `<div class="placeholder" style="color:var(--red)">Error: ${escH(e.message)}</div>`;
+  }
+}
+
+function renderProfile(panel, p) {
+  const profitColor = p.net_profit >= 0 ? 'var(--green)' : 'var(--red)';
+  const trendId     = 'chart-trend-'   + p.player_id.replace(/[^a-zA-Z0-9]/g, '_');
+  const actionId    = 'chart-pa-'      + p.player_id.replace(/[^a-zA-Z0-9]/g, '_');
+
+  panel.innerHTML = `
+    <h2 style="margin-bottom:16px;font-size:18px">
+      ${escH(p.player_display)}
+      <span class="style-${p.style_label.toLowerCase()}" style="font-size:13px;margin-left:10px">${p.style_label}</span>
+    </h2>
+    <div class="profile-stats">
+      <div class="profile-stat"><div class="label">VPIP</div>
+        <div class="value" style="color:var(--blue)">${p.vpip_pct}%</div></div>
+      <div class="profile-stat"><div class="label">PFR</div>
+        <div class="value" style="color:var(--teal)">${p.pfr_pct}%</div></div>
+      <div class="profile-stat"><div class="label">Agg%</div>
+        <div class="value" style="color:var(--orange)">${p.aggression_pct !== null ? p.aggression_pct + '%' : '&mdash;'}</div></div>
+      <div class="profile-stat"><div class="label">SD%</div>
+        <div class="value" style="color:var(--purple)">${p.showdown_pct}%</div></div>
+      <div class="profile-stat"><div class="label">Hands</div>
+        <div class="value">${p.hands_played}</div></div>
+      <div class="profile-stat"><div class="label">Net Profit</div>
+        <div class="value" style="color:${profitColor}">${p.net_profit >= 0 ? '+' : ''}${p.net_profit}</div></div>
+    </div>
+
+    <div class="profile-charts">
+      <div class="chart-card">
+        <h3>Profit Trend (cumulative $)</h3>
+        <div class="chart-wrap"><canvas id="${trendId}"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h3>Action Breakdown</h3>
+        <div class="chart-wrap"><canvas id="${actionId}"></canvas></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-bottom:12px;font-size:14px">Showdown History (last 50)</h3>
+      ${p.showdown_history.length === 0
+        ? '<div style="color:var(--muted)">No showdowns on record.</div>'
+        : `<div style="overflow-x:auto"><table class="showdown-table">
+            <thead><tr><th>Hand</th><th>Cards Shown</th><th>Pot Collected</th></tr></thead>
+            <tbody>
+              ${p.showdown_history.map(s => `
+                <tr>
+                  <td style="color:var(--muted);font-family:monospace">${escH(s.hand_id).slice(0,8)}&hellip;</td>
+                  <td>${escH(s.cards_shown)}</td>
+                  <td class="${s.pot_collected ? 'pos' : 'neg'}">${s.pot_collected ? '+$' + Number(s.pot_collected).toFixed(2) : '&mdash;'}</td>
+                </tr>`).join('')}
+            </tbody>
+           </table></div>`}
+    </div>
+  `;
+
+  // Profit trend chart
+  const endPositive = p.profit_trend.length > 0
+    ? p.profit_trend[p.profit_trend.length - 1].cumulative_profit >= 0
+    : true;
+  const lineColor = endPositive ? C.GREEN : C.RED;
+
+  mkChart(trendId, {
+    type: 'line',
+    data: {
+      labels:   p.profit_trend.map(pt => pt.hand_order),
+      datasets: [{
+        data:            p.profit_trend.map(pt => pt.cumulative_profit),
+        borderColor:     lineColor,
+        backgroundColor: lineColor + '22',
+        borderWidth: 2, fill: true, pointRadius: 0, tension: 0.3,
+      }],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { title: { display: true, text: 'Hand sequence (relative order)' }, grid: { color: '#21262d' } },
+        y: { title: { display: true, text: '$' }, grid: { color: '#21262d' } },
+      },
+    },
+  });
+
+  // Action donut
+  mkChart(actionId, {
+    type: 'doughnut',
+    data: {
+      labels:   p.action_breakdown.map(a => a.action),
+      datasets: [{
+        data: p.action_breakdown.map(a => +a.count),
+        backgroundColor: PALETTE,
+        hoverOffset: 6, borderWidth: 2, borderColor: '#161b22',
+      }],
+    },
+    options: donutOpts(),
+  });
+}
+
+// Deep-link from leaderboard row → switch to Players tab + load profile
+function openPlayerProfile(playerId) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-players').classList.add('active');
+  document.querySelectorAll('nav button')[1].classList.add('active');  // Players is index 1
+
+  (async () => {
+    if (!loaded['players']) { loaded['players'] = true; await loadPlayerList(); }
+    await selectPlayer(playerId);
+    const active = document.querySelector('#pl-list .player-list-item.active');
+    if (active) active.scrollIntoView({ block: 'nearest' });
+  })();
+}
+
+// ─────────────────────────────────────────────────────────
+//  GAME LOOKUP
+// ─────────────────────────────────────────────────────────
+async function scoutTable() {
+  const raw = document.getElementById('lookup-input').value.trim();
+  if (!raw) return;
+
+  // Accept full URL or bare ID
+  const urlMatch = raw.match(/games\/(pgl[A-Za-z0-9_-]+)/);
+  const gameId   = urlMatch ? urlMatch[1] : raw;
+
+  const status = document.getElementById('scout-status');
+  const grid   = document.getElementById('scout-grid');
+  const btn    = document.getElementById('lookup-btn');
+
+  btn.disabled   = true;
+  status.textContent = 'Fetching live hand data\u2026';
+  grid.innerHTML = '';
+
+  try {
+    const res = await fetch(`${API}/api/game/${encodeURIComponent(gameId)}`);
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+
+    status.textContent = `Hand #${body.max_hand} \u2014 ${body.players.length} players at the table`;
+
+    grid.innerHTML = body.players.map(p => {
+      if (!p.is_known) {
+        return `<div class="scout-card unknown">
+          <div class="sc-name">${escH(p.player_display)}</div>
+          <span class="sc-badge badge-unknown">No history</span>
+        </div>`;
+      }
+      const s = p.stats;
+      const pc = s.net_profit >= 0 ? 'var(--green)' : 'var(--red)';
+      return `<div class="scout-card" onclick="openPlayerProfile('${escH(p.player_id)}')">
+        <div class="sc-name">${escH(p.player_display)}</div>
+        <span class="sc-badge badge-${s.style_label}">${s.style_label}</span>
+        <div class="sc-stats">
+          <div class="sc-stat"><span class="k">VPIP </span>${s.vpip_pct}%</div>
+          <div class="sc-stat"><span class="k">PFR  </span>${s.pfr_pct}%</div>
+          <div class="sc-stat"><span class="k">Agg  </span>${s.aggression_pct !== null ? s.aggression_pct + '%' : '&mdash;'}</div>
+          <div class="sc-stat"><span class="k">Hands </span>${s.hands_played}</div>
+          <div class="sc-stat" style="grid-column:span 2">
+            <span class="k">Net </span>
+            <span style="color:${pc}">${s.net_profit >= 0 ? '+' : ''}${s.net_profit}</span>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--red)">${escH(e.message || 'Game not found or no recent hands available')}</span>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+//  Utilities
+// ─────────────────────────────────────────────────────────
+function fmt(n) { return Number(n).toLocaleString(); }
+function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+function escH(s) {
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ─────────────────────────────────────────────────────────
+//  Boot — Leaderboard is the default tab
+// ─────────────────────────────────────────────────────────
+loaded['leaderboard'] = true;
+loadLeaderboard();
+</script>
+</body>
+</html>
