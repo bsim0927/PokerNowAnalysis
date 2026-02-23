@@ -1,0 +1,13 @@
+# API config — contains endpoint URLs and optional credentials
+config.js
+
+# Environment variables
+.env
+.env.*
+
+# macOS metadata
+.DS_Store
+._*
+
+# Claude Code
+.claude/
