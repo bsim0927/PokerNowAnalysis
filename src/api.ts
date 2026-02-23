@@ -68,14 +68,14 @@ const PROFIT_CTES = `
   corrected_costs AS (
     SELECT c.player_id, c.hand_id,
            CASE
-             WHEN p.winner_count = 1 AND col.collected IS NOT NULL THEN
-               GREATEST(0, c.tracked_cost - GREATEST(0, t.total_tracked - p.pot))
+             WHEN col.collected IS NOT NULL AND p.pot IS NOT NULL THEN
+               GREATEST(0, c.tracked_cost - GREATEST(0, (t.total_tracked - p.pot) / p.winner_count))
              ELSE
                c.tracked_cost
            END AS actual_cost
     FROM tracked_per_player_hand c
     JOIN  total_tracked_per_hand t   ON t.hand_id  = c.hand_id
-    JOIN  pot_per_hand           p   ON p.hand_id  = c.hand_id
+    LEFT JOIN  pot_per_hand      p   ON p.hand_id  = c.hand_id
     LEFT JOIN collected_per_player_hand col
                                      ON col.hand_id = c.hand_id
                                     AND col.player_id = c.player_id
@@ -288,8 +288,8 @@ async function handlePlayer(res: ServerResponse, playerId: string): Promise<void
         hand_costs AS (
           SELECT ht.hand_id,
                  CASE
-                   WHEN p.winner_count = 1 AND mc.collected IS NOT NULL THEN
-                     GREATEST(0, ht.tracked_cost - GREATEST(0, t.total_tracked - p.pot))
+                   WHEN mc.collected IS NOT NULL AND p.pot IS NOT NULL THEN
+                     GREATEST(0, ht.tracked_cost - GREATEST(0, (t.total_tracked - p.pot) / p.winner_count))
                    ELSE ht.tracked_cost
                  END AS hand_cost
           FROM hand_tracked ht
