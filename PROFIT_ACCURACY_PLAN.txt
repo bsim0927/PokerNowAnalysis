@@ -1,0 +1,183 @@
+PLAN: Fixing Remaining Profit Calculation Limitations
+=====================================================
+
+Current State
+-------------
+Profit is reconstructed from pn_actions by estimating costs per street
+(SUM of calls + MAX of bets/raises/blinds) and subtracting from collections.
+A correction factor adjusts winner costs when total tracked costs exceed
+the pot. This is approximate — three known limitations remain.
+
+
+LIMITATION 1: Uncalled bets are not subtracted from costs
+---------------------------------------------------------
+Problem:
+  When a player bets or raises and everyone folds, PokerNow logs an
+  "uncalled_bet_returned" action with the returned amount. The parser
+  already captures this (parser.ts:182-198, action='uncalled_bet_returned'),
+  and it is already stored in pn_actions. But the profit query ignores it.
+
+  Example: Player raises to 500 on the river, everyone folds.
+  - tracked_cost includes 500 for that street (the raise)
+  - 400 is returned as uncalled bet
+  - Actual cost on that street should be 100, not 500
+  - The correction factor partially compensates (total_tracked > pot),
+    but only for WINNERS, and the math is imprecise with rounding.
+
+Fix (query-side, no scraper change needed):
+  Add an uncalled_bets CTE to PROFIT_CTES in api.ts:
+
+    uncalled_per_player_hand AS (
+      SELECT player_id, hand_id, SUM(amount) AS uncalled
+      FROM pn_actions
+      WHERE action = 'uncalled_bet_returned' AND player_id IS NOT NULL
+      GROUP BY player_id, hand_id
+    )
+
+  Then subtract uncalled amounts from tracked_cost BEFORE the correction:
+
+    tracked_per_player_hand becomes:
+      SELECT t.player_id, t.hand_id,
+             t.tracked_cost - COALESCE(u.uncalled, 0) AS tracked_cost
+      FROM <raw_tracked> t
+      LEFT JOIN uncalled_per_player_hand u
+        ON u.player_id = t.player_id AND u.hand_id = t.hand_id
+
+  This makes tracked costs more accurate, reducing reliance on the
+  correction factor.
+
+  Estimated impact: HIGH — uncalled bets happen frequently (any time a
+  bet/raise wins uncontested). This is the biggest remaining source of
+  inaccuracy.
+
+
+LIMITATION 2: Under-tracked costs (total_tracked < pot)
+-------------------------------------------------------
+Problem:
+  Sometimes total tracked costs across all players are LESS than the pot.
+  This means the collection side exceeds costs, producing a positive-sum
+  result for that hand (impossible in reality). The correction factor only
+  fires when total_tracked > pot, so these hands go uncorrected.
+
+  Root cause: The cost tracking formula (SUM calls + MAX bets/raises/blinds)
+  can miss edge cases in how PokerNow logs complex action sequences,
+  particularly all-in scenarios and side pots.
+
+Fix (query-side):
+  When total_tracked < pot for a hand, scale all players' costs UP
+  proportionally so they sum to pot:
+
+    actual_cost = tracked_cost * (pot / total_tracked)
+       when total_tracked < pot AND pot IS NOT NULL
+
+  This distributes the "missing" cost proportionally. Update the
+  corrected_costs CASE to add this branch:
+
+    CASE
+      WHEN col.collected IS NOT NULL AND p.pot IS NOT NULL
+           AND t.total_tracked > p.pot THEN
+        -- existing: reduce winner cost
+        GREATEST(0, c.tracked_cost - GREATEST(0,
+          (t.total_tracked - p.pot) / p.winner_count))
+      WHEN p.pot IS NOT NULL AND t.total_tracked < p.pot THEN
+        -- new: scale up all costs proportionally
+        c.tracked_cost * (p.pot / t.total_tracked)
+      ELSE
+        c.tracked_cost
+    END
+
+  Estimated impact: MEDIUM — fixes the zero-sum violation for
+  under-tracked hands but doesn't change overall profit dramatically.
+
+
+LIMITATION 3: No stack-based profit validation
+----------------------------------------------
+Problem:
+  The parser extracts starting_stack per player per hand (parser.ts:114)
+  but this data is never stored in the database. Starting stacks provide
+  the ground truth for profit: if a player's stack goes from 5000 in
+  hand N to 4700 in hand N+1 (with no buyin/cashout), they lost 300 on
+  hand N. This is exact, with no estimation needed.
+
+Fix (requires scraper + schema + query changes):
+
+  Step 1 — New database table:
+    CREATE TABLE pn_hand_players (
+      hand_id    TEXT NOT NULL,
+      player_id  TEXT NOT NULL,
+      seat       INT,
+      starting_stack NUMERIC,
+      PRIMARY KEY (hand_id, player_id)
+    );
+
+  Step 2 — Store hand player data during ingestion:
+    The parser already produces HandPlayer objects (parser.ts:274-286).
+    Wherever hands are inserted into pn_actions (the ingestion code that
+    writes to Supabase — currently outside this repo or done manually),
+    also INSERT into pn_hand_players.
+
+    If ingestion is done via the execute_sql RPC, add INSERT statements
+    for hand_players alongside the action inserts.
+
+  Step 3 — Stack-diff profit calculation:
+    For each player, order their hands chronologically and compute
+    stack deltas:
+
+      WITH player_hands AS (
+        SELECT hand_id, starting_stack,
+               ROW_NUMBER() OVER (ORDER BY hand_id) AS rn
+        FROM pn_hand_players
+        WHERE player_id = $1
+      ),
+      stack_diffs AS (
+        SELECT curr.hand_id,
+               curr.starting_stack - prev.starting_stack AS hand_profit
+        FROM player_hands curr
+        JOIN player_hands prev ON prev.rn = curr.rn - 1
+      )
+
+    hand_profit = next_hand_starting_stack - this_hand_starting_stack.
+    This is exact for consecutive hands WITH NO buyin/cashout between.
+
+  Step 4 — Parse buyins and cashouts:
+    PokerNow logs contain messages like:
+      "Player X updated their stack from 5000 to 7000"
+      "Player X joined the game with a stack of 5000"
+      "Player X left the game"
+      "The admin updated the player X stack from A to B"
+
+    Add regex patterns to parser.ts to capture these events. Store them
+    in a new table:
+
+      CREATE TABLE pn_stack_events (
+        player_id   TEXT NOT NULL,
+        event_type  TEXT NOT NULL,  -- 'buyin', 'cashout', 'admin_adjust'
+        amount      NUMERIC,
+        old_stack   NUMERIC,
+        new_stack   NUMERIC,
+        ts          TIMESTAMPTZ,
+        hand_id     TEXT  -- nearest hand for ordering
+      );
+
+    When computing stack-diff profit, subtract any buyin additions and
+    add back cashout withdrawals that occurred between hands.
+
+  Step 5 — Use stack-based profit as primary, fall back to action-based:
+    The stack-based approach is exact (given buyin/cashout tracking).
+    Use it as the primary profit source. Fall back to action-based
+    calculation for players/hands where stack data is missing.
+
+  Estimated impact: VERY HIGH — this would produce exact profit numbers,
+  making the action-based estimation a fallback rather than the primary
+  source.
+
+
+Implementation Priority
+-----------------------
+1. Limitation 1 (uncalled bets)   — Easy, query-only, high impact
+2. Limitation 2 (under-tracked)   — Easy, query-only, medium impact
+3. Limitation 3 (stack-based)     — Larger effort, highest impact
+   a. Create pn_hand_players table and store data
+   b. Implement stack-diff profit query
+   c. Parse buyin/cashout log messages
+   d. Integrate as primary profit source

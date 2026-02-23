@@ -34,8 +34,12 @@ function getPath(req: IncomingMessage): string {
   return url.pathname;
 }
 
-const PROFIT_CTES = `
-  tracked_per_player_hand AS (
+/**
+ * Hybrid stack-based + action-based profit CTEs.
+ * See PokerNowScraper/src/api.ts for detailed documentation.
+ */
+const ACTION_PROFIT_CTES = `
+  raw_tracked_per_player_hand AS (
     SELECT player_id, hand_id, SUM(street_cost) AS tracked_cost
     FROM (
       SELECT player_id, hand_id, street,
@@ -48,6 +52,19 @@ const PROFIT_CTES = `
       GROUP BY player_id, hand_id, street
     ) s
     GROUP BY player_id, hand_id
+  ),
+  uncalled_per_player_hand AS (
+    SELECT player_id, hand_id, SUM(amount) AS uncalled
+    FROM pn_actions
+    WHERE action = 'uncalled_bet_returned' AND player_id IS NOT NULL
+    GROUP BY player_id, hand_id
+  ),
+  tracked_per_player_hand AS (
+    SELECT r.player_id, r.hand_id,
+           GREATEST(0, r.tracked_cost - COALESCE(u.uncalled, 0)) AS tracked_cost
+    FROM raw_tracked_per_player_hand r
+    LEFT JOIN uncalled_per_player_hand u
+      ON u.player_id = r.player_id AND u.hand_id = r.hand_id
   ),
   total_tracked_per_hand AS (
     SELECT hand_id, SUM(tracked_cost) AS total_tracked
@@ -70,8 +87,12 @@ const PROFIT_CTES = `
   corrected_costs AS (
     SELECT c.player_id, c.hand_id,
            CASE
-             WHEN col.collected IS NOT NULL AND p.pot IS NOT NULL THEN
+             WHEN col.collected IS NOT NULL AND p.pot IS NOT NULL
+                  AND t.total_tracked > p.pot THEN
                GREATEST(0, c.tracked_cost - GREATEST(0, (t.total_tracked - p.pot) / p.winner_count))
+             WHEN p.pot IS NOT NULL AND t.total_tracked < p.pot
+                  AND t.total_tracked > 0 THEN
+               c.tracked_cost * (p.pot / t.total_tracked)
              ELSE
                c.tracked_cost
            END AS actual_cost
@@ -82,22 +103,55 @@ const PROFIT_CTES = `
                                      ON col.hand_id = c.hand_id
                                     AND col.player_id = c.player_id
   ),
-  costs AS (
-    SELECT player_id, SUM(actual_cost) AS total_cost
-    FROM corrected_costs
-    GROUP BY player_id
+  action_hand_profit AS (
+    SELECT
+      COALESCE(cc.player_id, cp.player_id) AS player_id,
+      COALESCE(cc.hand_id, cp.hand_id)     AS hand_id,
+      COALESCE(cp.collected, 0) - COALESCE(cc.actual_cost, 0) AS hand_net
+    FROM corrected_costs cc
+    FULL JOIN collected_per_player_hand cp
+      ON cp.hand_id = cc.hand_id AND cp.player_id = cc.player_id
+  )
+`;
+
+const PROFIT_CTES = `
+  ${ACTION_PROFIT_CTES},
+  hand_ts AS (
+    SELECT hand_id, MIN(ts) AS ts
+    FROM pn_actions
+    GROUP BY hand_id
   ),
-  collected_dedup AS (
-    SELECT player_id, SUM(collected) AS total_collected
-    FROM collected_per_player_hand
-    GROUP BY player_id
+  stack_deltas AS (
+    SELECT
+      hp.player_id,
+      hp.hand_id,
+      hp.starting_stack,
+      LEAD(hp.starting_stack) OVER (
+        PARTITION BY hp.player_id ORDER BY ht.ts
+      ) AS next_starting_stack
+    FROM pn_hand_players hp
+    JOIN hand_ts ht ON ht.hand_id = hp.hand_id
+  ),
+  stack_hand_profit AS (
+    SELECT player_id, hand_id,
+           next_starting_stack - starting_stack AS hand_net
+    FROM stack_deltas
+    WHERE next_starting_stack IS NOT NULL
+  ),
+  merged_hand_profit AS (
+    SELECT
+      COALESCE(s.player_id, a.player_id) AS player_id,
+      COALESCE(s.hand_id, a.hand_id)     AS hand_id,
+      COALESCE(s.hand_net, a.hand_net)   AS hand_net
+    FROM stack_hand_profit s
+    FULL JOIN action_hand_profit a
+      ON a.player_id = s.player_id AND a.hand_id = s.hand_id
   ),
   profit AS (
-    SELECT
-      COALESCE(c.player_id, cd.player_id) AS player_id,
-      ROUND((COALESCE(cd.total_collected, 0) - COALESCE(c.total_cost, 0))::numeric, 2) AS net
-    FROM costs c
-    FULL JOIN collected_dedup cd ON cd.player_id = c.player_id
+    SELECT player_id,
+           ROUND(SUM(hand_net)::numeric, 2) AS net
+    FROM merged_hand_profit
+    GROUP BY player_id
   )
 `;
 
@@ -252,16 +306,12 @@ async function handlePlayer(res: ServerResponse, playerId: string): Promise<void
     sql<{ hand_order: number; cumulative_profit: number }>(`
       WITH
         ${PROFIT_CTES},
-        hand_profit AS (
-          SELECT
-            COALESCE(cc.hand_id, cp.hand_id) AS hand_id,
-            COALESCE(cp.collected, 0) - COALESCE(cc.actual_cost, 0) AS hand_net
-          FROM corrected_costs cc
-          FULL JOIN collected_per_player_hand cp
-            ON cp.hand_id = cc.hand_id AND cp.player_id = cc.player_id
-          WHERE COALESCE(cc.player_id, cp.player_id) = '${escapedId}'
+        player_hand_profit AS (
+          SELECT hand_id, hand_net
+          FROM merged_hand_profit
+          WHERE player_id = '${escapedId}'
         ),
-        hand_ts AS (
+        player_hand_ts AS (
           SELECT hand_id, MIN(ts) AS ts
           FROM pn_actions
           WHERE player_id = '${escapedId}'
@@ -271,8 +321,8 @@ async function handlePlayer(res: ServerResponse, playerId: string): Promise<void
           SELECT
             ROW_NUMBER() OVER (ORDER BY ht.ts) AS hand_order,
             hp.hand_net
-          FROM hand_profit hp
-          JOIN hand_ts ht ON ht.hand_id = hp.hand_id
+          FROM player_hand_profit hp
+          JOIN player_hand_ts ht ON ht.hand_id = hp.hand_id
         )
       SELECT
         hand_order::int,
