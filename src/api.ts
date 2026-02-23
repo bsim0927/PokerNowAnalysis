@@ -151,7 +151,7 @@ const PROFIT_CTES = `
       ON  se.player_id = sd.player_id
       AND se.room_id   = sd.room_id
       AND se.ts > sd.hand_ts
-      AND se.ts < sd.next_hand_ts
+      AND se.ts <= sd.next_hand_ts
     WHERE sd.next_starting_stack IS NOT NULL
     GROUP BY sd.player_id, sd.hand_id
   ),
