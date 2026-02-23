@@ -36,10 +36,12 @@ function getPath(req: IncomingMessage): string {
 
 const PROFIT_CTES = `
   tracked_per_player_hand AS (
-    SELECT player_id, hand_id, SUM(street_max) AS tracked_cost
+    SELECT player_id, hand_id, SUM(street_cost) AS tracked_cost
     FROM (
       SELECT player_id, hand_id, street,
-             MAX(COALESCE(amount, 0)) AS street_max
+             COALESCE(SUM(CASE WHEN action = 'calls' THEN amount ELSE 0 END), 0)
+             + COALESCE(MAX(CASE WHEN action IN ('bets','raise','post big blind','post small blind') THEN amount END), 0)
+             AS street_cost
       FROM pn_actions
       WHERE action IN ('calls','bets','raise','post big blind','post small blind')
         AND player_id IS NOT NULL
@@ -53,7 +55,7 @@ const PROFIT_CTES = `
     GROUP BY hand_id
   ),
   collected_per_player_hand AS (
-    SELECT player_id, hand_id, MAX(amount) AS collected
+    SELECT player_id, hand_id, SUM(amount) AS collected
     FROM pn_actions
     WHERE action = 'collected' AND player_id IS NOT NULL
     GROUP BY player_id, hand_id
@@ -249,74 +251,28 @@ async function handlePlayer(res: ServerResponse, playerId: string): Promise<void
 
     sql<{ hand_order: number; cumulative_profit: number }>(`
       WITH
-        hand_tracked AS (
-          SELECT hand_id, SUM(street_max) AS tracked_cost
-          FROM (
-            SELECT hand_id, street, MAX(COALESCE(amount, 0)) AS street_max
-            FROM pn_actions
-            WHERE action IN ('calls','bets','raise','post big blind','post small blind')
-              AND player_id = '${escapedId}'
-            GROUP BY hand_id, street
-          ) sub
-          GROUP BY hand_id
-        ),
-        total_tracked_per_hand AS (
-          SELECT hand_id, SUM(street_max) AS total_tracked
-          FROM (
-            SELECT hand_id, player_id, street, MAX(COALESCE(amount, 0)) AS street_max
-            FROM pn_actions
-            WHERE action IN ('calls','bets','raise','post big blind','post small blind')
-              AND player_id IS NOT NULL
-            GROUP BY hand_id, player_id, street
-          ) s
-          GROUP BY hand_id
-        ),
-        pot_per_hand AS (
-          SELECT hand_id, SUM(hand_max) AS pot, COUNT(*) AS winner_count
-          FROM (
-            SELECT hand_id, player_id, MAX(amount) AS hand_max
-            FROM pn_actions WHERE action = 'collected' AND player_id IS NOT NULL
-            GROUP BY hand_id, player_id
-          ) sub
-          GROUP BY hand_id
-        ),
-        my_collected AS (
-          SELECT hand_id, MAX(amount) AS collected
-          FROM pn_actions WHERE action = 'collected' AND player_id = '${escapedId}'
-          GROUP BY hand_id
-        ),
-        hand_costs AS (
-          SELECT ht.hand_id,
-                 CASE
-                   WHEN mc.collected IS NOT NULL AND p.pot IS NOT NULL THEN
-                     GREATEST(0, ht.tracked_cost - GREATEST(0, (t.total_tracked - p.pot) / p.winner_count))
-                   ELSE ht.tracked_cost
-                 END AS hand_cost
-          FROM hand_tracked ht
-          JOIN  total_tracked_per_hand t  ON t.hand_id  = ht.hand_id
-          LEFT JOIN pot_per_hand       p  ON p.hand_id  = ht.hand_id
-          LEFT JOIN my_collected       mc ON mc.hand_id = ht.hand_id
-        ),
-        hand_collected AS (
-          SELECT hand_id, MAX(amount) AS hand_collected
-          FROM pn_actions
-          WHERE action = 'collected' AND player_id = '${escapedId}'
-          GROUP BY hand_id
-        ),
-        all_hands AS (
+        ${PROFIT_CTES},
+        hand_profit AS (
           SELECT
-            COALESCE(hc.hand_id, hco.hand_id) AS hand_id,
-            MIN(ts) AS hand_ts,
-            COALESCE(hco.hand_collected, 0) - COALESCE(hc.hand_cost, 0) AS hand_net
-          FROM pn_actions a
-          LEFT JOIN hand_costs    hc  ON hc.hand_id  = a.hand_id
-          LEFT JOIN hand_collected hco ON hco.hand_id = a.hand_id
-          WHERE a.player_id = '${escapedId}'
-          GROUP BY COALESCE(hc.hand_id, hco.hand_id), hco.hand_collected, hc.hand_cost
+            COALESCE(cc.hand_id, cp.hand_id) AS hand_id,
+            COALESCE(cp.collected, 0) - COALESCE(cc.actual_cost, 0) AS hand_net
+          FROM corrected_costs cc
+          FULL JOIN collected_per_player_hand cp
+            ON cp.hand_id = cc.hand_id AND cp.player_id = cc.player_id
+          WHERE COALESCE(cc.player_id, cp.player_id) = '${escapedId}'
+        ),
+        hand_ts AS (
+          SELECT hand_id, MIN(ts) AS ts
+          FROM pn_actions
+          WHERE player_id = '${escapedId}'
+          GROUP BY hand_id
         ),
         ordered AS (
-          SELECT ROW_NUMBER() OVER (ORDER BY hand_ts) AS hand_order, hand_net
-          FROM all_hands
+          SELECT
+            ROW_NUMBER() OVER (ORDER BY ht.ts) AS hand_order,
+            hp.hand_net
+          FROM hand_profit hp
+          JOIN hand_ts ht ON ht.hand_id = hp.hand_id
         )
       SELECT
         hand_order::int,
