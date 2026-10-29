@@ -61,6 +61,21 @@ nav button {
 nav button:hover { color: var(--text); }
 nav button.active { color: var(--green); border-bottom-color: var(--green); }
 
+/* ── Incomplete-data notice ──────────────────────────── */
+.audit-banner {
+  background: rgba(240,136,62,.10); border-bottom: 1px solid var(--orange);
+  color: var(--text); padding: 10px 24px; font-size: 13px;
+}
+.audit-banner[hidden] { display: none; }
+.audit-banner b { color: var(--orange); }
+.audit-banner button {
+  background: none; border: none; color: var(--blue); cursor: pointer;
+  font-size: 13px; padding: 0 0 0 6px; text-decoration: underline;
+}
+.audit-banner ul { margin: 8px 0 2px 18px; color: var(--muted); }
+.audit-banner li { margin: 2px 0; }
+.audit-banner code { color: var(--text); }
+
 /* ── Tab content ─────────────────────────────────────── */
 .tab { display: none; padding: 24px; }
 .tab.active { display: block; }
@@ -336,6 +351,8 @@ tbody td { padding: 9px 12px; font-size: 13px; white-space: nowrap; }
   <button onclick="switchTab('players',this)">Players</button>
   <button onclick="switchTab('lookup',this)">Game Lookup</button>
 </nav>
+
+<div id="audit-banner" class="audit-banner" hidden></div>
 
 <!-- ═══════════════ LEADERBOARD ═══════════════ -->
 <div id="tab-leaderboard" class="tab active">
@@ -777,10 +794,38 @@ function escH(s) {
 }
 
 // ─────────────────────────────────────────────────────────
+//  Incomplete-data notice (games that failed the chip-balance audit)
+// ─────────────────────────────────────────────────────────
+function auditBannerHtml(games) {
+  const bad = (games || []).filter(g => !g.ok);
+  if (!bad.length) return '';
+  const rows = bad.map(g => {
+    const off = Number(g.total_net);
+    return `<li><code>${escH(g.game_id.slice(0, 12))}…</code> &middot; ${fmt(g.hands)} hands &middot; profits sum to `
+         + `${off >= 0 ? '+' : ''}${off.toFixed(2)} (should be 0)</li>`;
+  }).join('');
+  return `<b>&#9888; ${bad.length} of ${games.length} games have incomplete data.</b> `
+       + `They were captured before antes, bounties and cash-outs were recorded, so individual profits in them can be off. `
+       + `They are still included in the totals.`
+       + `<button onclick="document.getElementById('audit-list').hidden = !document.getElementById('audit-list').hidden">details</button>`
+       + `<ul id="audit-list" hidden>${rows}</ul>`;
+}
+
+async function loadAuditBanner() {
+  try {
+    const html = auditBannerHtml(await apiFetch('/api/games'));
+    const el = document.getElementById('audit-banner');
+    el.innerHTML = html;
+    el.hidden = !html;
+  } catch (e) { /* the notice is optional; never block the dashboard */ }
+}
+
+// ─────────────────────────────────────────────────────────
 //  Boot — Leaderboard is the default tab
 // ─────────────────────────────────────────────────────────
 loaded['leaderboard'] = true;
 loadLeaderboard();
+loadAuditBanner();
 </script>
 </body>
 </html>

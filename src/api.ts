@@ -40,7 +40,7 @@ function getPath(req: IncomingMessage): string {
  */
 // Per-street cost: every 'calls'/'bets'/'raise'/blind amount in PokerNow's log is the player's
 // TOTAL for that street ("calls 173.23" after "bets 70" means 173.23 in all), so the cost is the
-// MAX of them. Antes and the dead small blind are extra chips on top; bounties are settled
+// MAX of them. Antes, the dead small blind and bomb-pot bets are extra chips on top; bounties are settled
 // after the hand and kept out of the pot math. Verified against stack-based profit on a full
 // 310-hand game: 0 of 2,372 player-hands disagree.
 const ACTION_PROFIT_CTES = `
@@ -48,12 +48,12 @@ const ACTION_PROFIT_CTES = `
     SELECT player_id, hand_id, SUM(street_cost) AS tracked_cost
     FROM (
       SELECT player_id, hand_id, street,
-             COALESCE(SUM(CASE WHEN action IN ('ante','post missing small blind') THEN amount ELSE 0 END), 0)
+             COALESCE(SUM(CASE WHEN action IN ('ante','post missing small blind','bomb_pot_bet') THEN amount ELSE 0 END), 0)
              + COALESCE(MAX(CASE WHEN action IN ('calls','bets','raise','post big blind','post small blind','post missed big blind') THEN amount END), 0)
              AS street_cost
       FROM pn_actions
       WHERE action IN ('calls','bets','raise','post big blind','post small blind',
-                       'ante','post missing small blind','post missed big blind')
+                       'ante','post missing small blind','post missed big blind','bomb_pot_bet')
         AND player_id IS NOT NULL
       GROUP BY player_id, hand_id, street
     ) s
@@ -187,13 +187,23 @@ const PROFIT_CTES = `
       ON sa.player_id = sd.player_id AND sa.hand_id = sd.hand_id
     WHERE sd.next_starting_stack IS NOT NULL
   ),
+  -- Chips can't appear or vanish inside a hand, so an action-based hand whose results don't sum to
+  -- zero has data missing from the log (e.g. no recorded winner) and its per-player results are
+  -- wrong. Those hands are left out of the action-based fallback; stack-based results are unaffected.
+  reconciled_action_profit AS (
+    SELECT a.player_id, a.hand_id, a.hand_net
+    FROM action_hand_profit a
+    WHERE a.hand_id IN (
+      SELECT hand_id FROM action_hand_profit GROUP BY hand_id HAVING ABS(SUM(hand_net)) < 0.011
+    )
+  ),
   merged_hand_profit AS (
     SELECT
       COALESCE(s.player_id, a.player_id) AS player_id,
       COALESCE(s.hand_id, a.hand_id)     AS hand_id,
       COALESCE(s.hand_net, a.hand_net)   AS hand_net
     FROM stack_hand_profit s
-    FULL JOIN action_hand_profit a
+    FULL JOIN reconciled_action_profit a
       ON a.player_id = s.player_id AND a.hand_id = s.hand_id
   ),
   profit AS (
@@ -325,6 +335,33 @@ async function handleActions(res: ServerResponse): Promise<void> {
     ORDER BY count DESC
   `);
   jsonOk(res, rows);
+}
+
+interface GameAudit {
+  game_id: string;
+  ok: boolean;
+  hands: number;
+  players: number;
+  pot_failures: number;
+  ledger_failures: number;
+  total_net: number;
+  audited_at: string;
+}
+
+// Chip-balance audit result per game, written by the scraper (pn_game_audits). A game with
+// ok = false has data the audit couldn't reconcile (e.g. captured by the old scraper).
+async function handleGames(res: ServerResponse): Promise<void> {
+  try {
+    const rows = await sql<GameAudit>(`
+      SELECT game_id, ok, hands::int, players::int, pot_failures::int, ledger_failures::int,
+             ROUND(total_net::numeric, 2)::float AS total_net, audited_at
+      FROM pn_game_audits
+      ORDER BY ok, audited_at DESC
+    `);
+    jsonOk(res, rows);
+  } catch {
+    jsonOk(res, []); // table not created yet (migration 003): the dashboard just shows no notice
+  }
 }
 
 async function handlePlayers(res: ServerResponse): Promise<void> {
@@ -565,6 +602,7 @@ export async function handleApiRequest(
     if (pathname === '/api/stats/pots')    { await handlePots(res);      return true; }
     if (pathname === '/api/stats/actions') { await handleActions(res);   return true; }
     if (pathname === '/api/players')       { await handlePlayers(res);   return true; }
+    if (pathname === '/api/games')         { await handleGames(res);     return true; }
 
     const playerMatch = pathname.match(/^\/api\/player\/([^/]+)$/);
     if (playerMatch) { await handlePlayer(res, playerMatch[1]); return true; }
