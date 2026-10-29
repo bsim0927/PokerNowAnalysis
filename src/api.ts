@@ -364,6 +364,65 @@ async function handleGames(res: ServerResponse): Promise<void> {
   }
 }
 
+// Everything the scraper control center needs, in one call. Each part degrades to an empty value
+// when its table doesn't exist yet (migrations 003 / 005), so the page still loads.
+async function handleMonitor(res: ServerResponse): Promise<void> {
+  const safe = async <T>(query: string, fallback: T[] = []): Promise<T[]> => {
+    try { return await sql<T>(query); } catch { return fallback; }
+  };
+
+  const gamesQuery = (withAudits: boolean) => withAudits ? `
+    SELECT COALESCE(g.game_id, a.game_id) AS game_id,
+           (g.game_id IS NOT NULL) AS tracked,
+           g.max_hand::int, g.last_scraped_hand::int, g.is_active,
+           EXTRACT(EPOCH FROM (now() - g.last_checked_at))::int AS checked_ago_s,
+           EXTRACT(EPOCH FROM (now() - g.discovered_at))::int   AS discovered_ago_s,
+           a.ok AS audit_ok, ROUND(a.total_net::numeric, 2)::float AS audit_net, a.hands::int AS audit_hands
+    FROM poker_games g FULL OUTER JOIN pn_game_audits a ON a.game_id = g.game_id
+    ORDER BY (g.is_active IS TRUE) DESC, g.last_checked_at DESC NULLS LAST
+  ` : `
+    SELECT game_id, TRUE AS tracked, max_hand::int, last_scraped_hand::int, is_active,
+           EXTRACT(EPOCH FROM (now() - last_checked_at))::int AS checked_ago_s,
+           EXTRACT(EPOCH FROM (now() - discovered_at))::int   AS discovered_ago_s,
+           NULL::boolean AS audit_ok, NULL::float AS audit_net, NULL::int AS audit_hands
+    FROM poker_games ORDER BY (is_active IS TRUE) DESC, last_checked_at DESC NULLS LAST
+  `;
+
+  const [status, games, totals, hourly, db] = await Promise.all([
+    safe(`
+      SELECT state, current_game, host, version, last_error, last_error_at, discord_enabled,
+             poll_interval_s, cycles::int, games_checked, hands_scraped, new_games, unknown_lines,
+             last_cycle_seconds::float,
+             EXTRACT(EPOCH FROM (now() - heartbeat_at))::int           AS heartbeat_age_s,
+             EXTRACT(EPOCH FROM (now() - started_at))::int             AS uptime_s,
+             EXTRACT(EPOCH FROM (now() - last_cycle_finished_at))::int AS last_cycle_ago_s,
+             EXTRACT(EPOCH FROM (now() - last_error_at))::int          AS last_error_ago_s
+      FROM pn_scraper_status WHERE id = 1`),
+    safe(gamesQuery(true)).then(r => r.length ? r : safe(gamesQuery(false))),
+    safe(`
+      SELECT (SELECT COUNT(*) FROM pn_actions)::int                          AS actions,
+             (SELECT COUNT(DISTINCT hand_id) FROM pn_hand_players)::int      AS hands,
+             (SELECT COUNT(DISTINCT player_id) FROM pn_hand_players)::int    AS players,
+             (SELECT COUNT(*) FROM pn_stack_events)::int                     AS stack_events,
+             (SELECT COUNT(*) FROM pn_raw_hands)::int                        AS raw_hands`),
+    safe(`
+      SELECT to_char(date_trunc('hour', fetched_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24":00:00Z') AS hour,
+             COUNT(*)::int AS hands
+      FROM pn_raw_hands WHERE fetched_at > now() - interval '24 hours' GROUP BY 1 ORDER BY 1`),
+    safe(`SELECT pg_database_size(current_database())::float AS bytes`),
+  ]);
+
+  jsonOk(res, {
+    server_time: new Date().toISOString(),
+    scraper: status[0] ?? null,        // null until migration 005 is run and the scraper restarted
+    games,
+    totals: totals[0] ?? null,
+    hourly,
+    db_bytes: (db[0] as { bytes: number } | undefined)?.bytes ?? null,
+    db_limit_bytes: 500 * 1000 * 1000,  // Supabase free plan: 500 MB
+  });
+}
+
 async function handlePlayers(res: ServerResponse): Promise<void> {
   const rows = await sql<PlayerSummary>(playersCTE());
   jsonOk(res, rows);
@@ -603,6 +662,7 @@ export async function handleApiRequest(
     if (pathname === '/api/stats/actions') { await handleActions(res);   return true; }
     if (pathname === '/api/players')       { await handlePlayers(res);   return true; }
     if (pathname === '/api/games')         { await handleGames(res);     return true; }
+    if (pathname === '/api/monitor')       { await handleMonitor(res);   return true; }
 
     const playerMatch = pathname.match(/^\/api\/player\/([^/]+)$/);
     if (playerMatch) { await handlePlayer(res, playerMatch[1]); return true; }

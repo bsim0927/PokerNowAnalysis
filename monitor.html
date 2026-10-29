@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scraper Control Center</title>
+<script src="config.js"></script>
+<style>
+:root {
+  --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #e6edf3; --muted: #8b949e;
+  --green: #2dba80; --blue: #4a9eff; --gold: #f0c040; --red: #f85149; --orange: #f0883e;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font: 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; min-height: 100vh; }
+a { color: var(--blue); text-decoration: none; } a:hover { text-decoration: underline; }
+code { font-family: ui-monospace, monospace; font-size: 12.5px; }
+
+header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 24px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+header h1 { font-size: 18px; font-weight: 600; color: var(--green); }
+header .spacer { flex: 1; }
+header .sub { color: var(--muted); font-size: 13px; }
+header button { background: none; border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: 13px; }
+header button:hover { border-color: var(--blue); }
+
+main { max-width: 1100px; margin: 0 auto; padding: 24px; display: grid; gap: 20px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; }
+.card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; margin-bottom: 12px; }
+
+/* hero status */
+.hero { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; border-left: 4px solid var(--muted); }
+.hero.ok { border-left-color: var(--green); } .hero.warn { border-left-color: var(--orange); }
+.hero.bad { border-left-color: var(--red); } .hero.idle, .hero.unknown { border-left-color: var(--muted); }
+.orb { width: 14px; height: 14px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+.ok .orb { background: var(--green); box-shadow: 0 0 10px var(--green); animation: pulse 2.2s infinite; }
+.warn .orb { background: var(--orange); box-shadow: 0 0 10px var(--orange); }
+.bad .orb { background: var(--red); box-shadow: 0 0 10px var(--red); }
+@keyframes pulse { 50% { opacity: .45; } }
+.hero-title { font-size: 22px; font-weight: 600; }
+.hero-detail { color: var(--muted); margin-top: 2px; }
+.hero-meta { margin-left: auto; text-align: right; color: var(--muted); font-size: 12.5px; line-height: 1.7; }
+
+/* alerts */
+.alert { display: flex; gap: 10px; padding: 8px 12px; border-radius: 6px; margin-bottom: 6px; background: rgba(139,148,158,.08); border-left: 3px solid var(--muted); }
+.alert.bad { background: rgba(248,81,73,.10); border-left-color: var(--red); }
+.alert.warn { background: rgba(240,136,62,.10); border-left-color: var(--orange); }
+.alert:last-child { margin-bottom: 0; }
+.alert .tag { font-size: 11px; font-weight: 700; text-transform: uppercase; min-width: 38px; padding-top: 2px; color: var(--muted); }
+.alert.bad .tag { color: var(--red); } .alert.warn .tag { color: var(--orange); }
+.clear { color: var(--green); }
+
+/* stat cards */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.stat .v { font-size: 26px; font-weight: 600; }
+.stat .l { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.bar { height: 6px; background: var(--border); border-radius: 3px; overflow: hidden; margin-top: 8px; }
+.bar > i { display: block; height: 100%; background: var(--green); }
+.bar.warn > i { background: var(--orange); } .bar.bad > i { background: var(--red); }
+
+/* chart + table */
+.bars { display: flex; gap: 4px; align-items: flex-end; }
+.bars .col { flex: 1; display: flex; flex-direction: column; align-items: center; min-width: 0; }
+.bars .slot { height: 80px; width: 100%; display: flex; align-items: flex-end; }
+.bars .slot i { display: block; width: 100%; background: var(--green); opacity: .85; border-radius: 3px 3px 0 0; }
+.bars .slot i:hover { opacity: 1; }
+.bars .col span { font-size: 10px; color: var(--muted); height: 14px; margin-top: 4px; }
+.tablewrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; color: var(--muted); font-size: 12px; font-weight: 500; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+td { padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+tr:last-child td { border-bottom: none; }
+.pill { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; background: rgba(139,148,158,.18); color: var(--muted); }
+.pill.live { background: rgba(45,186,128,.18); color: var(--green); }
+.pill.bad { background: rgba(248,81,73,.18); color: var(--red); }
+.progress { display: inline-flex; align-items: center; gap: 8px; }
+.progress .bar { width: 90px; margin: 0; }
+.muted { color: var(--muted); } .ok-t { color: var(--green); } .bad-t { color: var(--red); }
+#err { display: none; background: rgba(248,81,73,.12); border: 1px solid var(--red); border-radius: 6px; padding: 10px 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Scraper Control Center</h1>
+  <span class="sub" id="updated">loading&hellip;</span>
+  <span class="spacer"></span>
+  <label class="sub"><input type="checkbox" id="auto" checked> auto-refresh (30 s)</label>
+  <button onclick="load()">Refresh now</button>
+  <a href="poker_dashboard.html">&larr; Dashboard</a>
+</header>
+<main>
+  <div id="err"></div>
+  <div class="card hero" id="hero"></div>
+  <div class="card"><h2>Alerts</h2><div id="alerts"></div></div>
+  <div class="stats" id="stats"></div>
+  <div class="card"><h2>Hands archived per hour (last 24 h)</h2><div id="chart"></div></div>
+  <div class="card"><h2>Games</h2><div class="tablewrap" id="games"></div></div>
+</main>
+
+<script>
+// ─────────────────────────────────────────────────────────
+//  Logic (pure functions: no DOM access)
+// ─────────────────────────────────────────────────────────
+const API = (window.POKER_CONFIG && window.POKER_CONFIG.API) || 'http://localhost:3456';
+const LATE_S = 20 * 60;   // scraper checks in at least every 5 min, so 20 min of silence is late
+const DOWN_S = 60 * 60;
+
+function escH(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function short(id) { return id ? id.slice(0, 12) : '?'; }
+function signed(n) { n = Number(n); return (n >= 0 ? '+' : '') + n.toFixed(2); }
+function cap(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+function ago(s) {
+  if (s == null) return 'never';
+  s = Math.max(0, Math.round(s));
+  if (s < 90) return s + ' s';
+  const m = Math.round(s / 60);
+  if (m < 90) return m + ' min';
+  const h = s / 3600;
+  return h < 48 ? h.toFixed(1) + ' h' : Math.round(h / 24) + ' d';
+}
+function bytes(n) { return n >= 1e9 ? (n / 1e9).toFixed(2) + ' GB' : (n / 1e6).toFixed(0) + ' MB'; }
+
+function deriveStatus(d) {
+  const s = d.scraper;
+  if (s) {
+    const age = s.heartbeat_age_s;
+    if (s.state === 'stopped') return { level: 'idle', title: 'Stopped', detail: `Shut down cleanly ${ago(age)} ago.` };
+    if (age <= LATE_S) {
+      let what = s.state;
+      if (s.state === 'scraping' && s.current_game) what = `scraping ${short(s.current_game)}`;
+      else if (s.state === 'discovering') what = 'looking for new games on Discord';
+      else if (s.state === 'sleeping') {
+        const left = s.last_cycle_ago_s != null ? s.poll_interval_s - s.last_cycle_ago_s : null;
+        what = left != null && left > 0 ? `idle, next check in about ${ago(left)}` : 'idle, next check due';
+      }
+      return { level: 'ok', title: 'Running', detail: cap(what) };
+    }
+    if (age <= DOWN_S) return { level: 'warn', title: 'Late', detail: `No check-in for ${ago(age)} (it normally checks in every 5 min).` };
+    return { level: 'bad', title: 'Not responding', detail: `No check-in for ${ago(age)}. Is the container running?` };
+  }
+  // No heartbeat table yet: estimate from when games were last checked
+  const checked = d.games.filter(g => g.tracked && g.checked_ago_s != null);
+  if (!checked.length) return { level: 'unknown', title: 'No data', detail: 'No game has been checked yet.', estimated: true };
+  const newest = Math.min(...checked.map(g => g.checked_ago_s));
+  const level = newest <= 45 * 60 ? 'ok' : newest <= 3 * 3600 ? 'warn' : 'bad';
+  return {
+    level, estimated: true,
+    title: level === 'ok' ? 'Running (estimated)' : level === 'warn' ? 'Possibly late' : 'Possibly down',
+    detail: `Newest game check was ${ago(newest)} ago. For an exact heartbeat run migrations/005_scraper_status.sql and restart the scraper.`,
+  };
+}
+
+function deriveAlerts(d) {
+  const out = [], s = d.scraper, st = deriveStatus(d);
+  if (st.level === 'warn' || st.level === 'bad') out.push({ level: st.level, text: `${st.title}: ${st.detail}` });
+  if (s && s.last_error && s.last_error_ago_s != null && s.last_error_ago_s < 86400)
+    out.push({ level: 'warn', text: `Last error ${ago(s.last_error_ago_s)} ago: ${s.last_error}` });
+  if (s && s.unknown_lines > 0)
+    out.push({ level: 'warn', text: `${s.unknown_lines} log line(s) in the last cycle weren't recognised. PokerNow may have changed its wording; check the scraper logs.` });
+  if (s && !s.discord_enabled) out.push({ level: 'info', text: 'Discord discovery is off: only games added by hand are scraped.' });
+  const recent = g => g.tracked && (g.is_active || (g.discovered_ago_s != null && g.discovered_ago_s < 7 * 86400));
+  for (const g of d.games) {
+    if (g.audit_ok === false) {
+      out.push(recent(g)
+        ? { level: 'bad', text: `${short(g.game_id)} fails the chip-balance audit (profits sum to ${signed(g.audit_net)}). The current scraper's data should balance: investigate.` }
+        : { level: 'info', text: `${short(g.game_id)} fails the chip-balance audit (${signed(g.audit_net)}). Known: captured before antes, bounties and cash-outs were recorded.` });
+    }
+  }
+  const limit = 2 * ((s && s.poll_interval_s) || 1800);
+  if (st.level === 'ok')
+    for (const g of d.games)
+      if (g.tracked && g.is_active && g.checked_ago_s != null && g.checked_ago_s > limit)
+        out.push({ level: 'warn', text: `${short(g.game_id)} is active but hasn't been checked for ${ago(g.checked_ago_s)}.` });
+  if (d.db_bytes != null) {
+    const f = d.db_bytes / d.db_limit_bytes;
+    if (f > 0.8) out.push({ level: f > 0.95 ? 'bad' : 'warn', text: `Database is ${(f * 100).toFixed(0)}% of the free plan's ${bytes(d.db_limit_bytes)}.` });
+  }
+  const rank = { bad: 0, warn: 1, info: 2 };
+  return out.sort((a, b) => rank[a.level] - rank[b.level]);
+}
+
+function hourlySeries(d) {
+  const end = new Date(d.server_time); end.setUTCMinutes(0, 0, 0);
+  const byHour = new Map(d.hourly.map(h => [new Date(h.hour).getTime(), h.hands]));
+  return Array.from({ length: 24 }, (_, i) => {
+    const t = end.getTime() - (23 - i) * 3600e3;
+    return { t, label: new Date(t).getUTCHours(), hands: byHour.get(t) || 0 };
+  });
+}
+
+// ─────────────────────────────────────────────────────────
+//  Rendering
+// ─────────────────────────────────────────────────────────
+function render(d) {
+  const st = deriveStatus(d), s = d.scraper;
+  const meta = s ? [
+    `${escH(s.host || '?')} &middot; v${escH(s.version || '?')}`,
+    `up ${ago(s.uptime_s)} &middot; ${s.cycles} cycle${s.cycles === 1 ? '' : 's'} since start`,
+    s.last_cycle_seconds != null ? `last cycle ${Math.round(s.last_cycle_seconds)} s &middot; ${s.games_checked ?? 0} games &middot; ${s.hands_scraped ?? 0} new hands` : 'no cycle finished yet',
+  ] : ['no heartbeat table yet'];
+  const hero = document.getElementById('hero');
+  hero.className = 'card hero ' + st.level;
+  hero.innerHTML = `<div class="orb"></div><div><div class="hero-title">${escH(st.title)}</div>`
+                 + `<div class="hero-detail">${escH(st.detail)}</div></div><div class="hero-meta">${meta.join('<br>')}</div>`;
+
+  const alerts = deriveAlerts(d);
+  document.getElementById('alerts').innerHTML = alerts.length
+    ? alerts.map(a => `<div class="alert ${a.level}"><span class="tag">${a.level}</span><span>${escH(a.text)}</span></div>`).join('')
+    : '<span class="clear">&#10003; All clear</span>';
+
+  const t = d.totals || {}, tracked = d.games.filter(g => g.tracked);
+  const last24 = d.hourly.reduce((n, h) => n + h.hands, 0);
+  const f = d.db_bytes != null ? d.db_bytes / d.db_limit_bytes : null;
+  const card = (v, l, extra = '') => `<div class="card stat"><div class="v">${v}</div><div class="l">${l}</div>${extra}</div>`;
+  document.getElementById('stats').innerHTML =
+      card(tracked.length, `games tracked &middot; ${tracked.filter(g => g.is_active).length} live`)
+    + card(Number(t.raw_hands ?? 0).toLocaleString(), `hands archived &middot; ${last24} in 24 h`)
+    + card(Number(t.actions ?? 0).toLocaleString(), 'actions stored')
+    + card(Number(t.players ?? 0).toLocaleString(), 'players seen')
+    + (f != null ? card(bytes(d.db_bytes), `database &middot; ${(f * 100).toFixed(0)}% of ${bytes(d.db_limit_bytes)}`,
+        `<div class="bar ${f > 0.95 ? 'bad' : f > 0.8 ? 'warn' : ''}"><i style="width:${Math.min(100, f * 100)}%"></i></div>`) : '');
+
+  const series = hourlySeries(d), max = Math.max(1, ...series.map(p => p.hands));
+  document.getElementById('chart').innerHTML = '<div class="bars">' + series.map((p, i) => {
+    const hh = String(p.label).padStart(2, '0');
+    const h = p.hands ? Math.max(3, Math.round((p.hands / max) * 80)) : 0;
+    return `<div class="col"><div class="slot"><i style="height:${h}px" title="${hh}:00 UTC: ${p.hands} hands"></i></div>`
+         + `<span>${i % 3 === 0 ? hh : ''}</span></div>`;
+  }).join('') + '</div>';
+
+  document.getElementById('games').innerHTML = d.games.length ? `<table><thead><tr>
+      <th>Game</th><th>State</th><th>Progress</th><th>Last checked</th><th>Chip audit</th></tr></thead><tbody>`
+    + d.games.map(g => {
+        const pct = g.max_hand ? Math.min(100, Math.round(100 * g.last_scraped_hand / g.max_hand)) : 0;
+        const done = g.tracked && g.max_hand > 0 && g.last_scraped_hand >= g.max_hand;
+        const state = !g.tracked ? '<span class="pill">not tracked</span>'
+          : g.is_active ? '<span class="pill live">live</span>'
+          : done ? '<span class="pill">finished</span>' : '<span class="pill bad">incomplete</span>';
+        const audit = g.audit_ok == null ? '<span class="muted">&mdash;</span>'
+          : g.audit_ok ? `<span class="ok-t">&#10003; balanced</span>` : `<span class="bad-t">&#10007; ${signed(g.audit_net)}</span>`;
+        const id = escH(g.game_id);
+        return `<tr><td><a href="https://www.pokernow.com/games/${id}" target="_blank" rel="noopener"><code>${escH(short(g.game_id))}&hellip;</code></a></td>`
+             + `<td>${state}</td>`
+             + `<td>${g.tracked ? `<span class="progress"><span class="bar"><i style="width:${pct}%"></i></span>${g.last_scraped_hand}/${g.max_hand}</span>` : `<span class="muted">${g.audit_hands ?? '?'} hands audited</span>`}</td>`
+             + `<td class="muted">${g.checked_ago_s != null ? ago(g.checked_ago_s) + ' ago' : '&mdash;'}</td><td>${audit}</td></tr>`;
+      }).join('') + '</tbody></table>' : '<span class="muted">No games yet.</span>';
+
+  document.getElementById('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+}
+
+async function load() {
+  const err = document.getElementById('err');
+  try {
+    const res = await fetch(API + '/api/monitor', { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    render(await res.json());
+    err.style.display = 'none';
+  } catch (e) {
+    err.style.display = 'block';
+    err.textContent = `Can't reach the API at ${API} (${e.message}). Start it with: cd ~/Desktop/PokerNowAnalysis && npm start`;
+  }
+}
+
+if (window.MONITOR_PRELOAD) { render(window.MONITOR_PRELOAD); }
+else { load(); setInterval(() => { if (document.getElementById('auto').checked) load(); }, 30000); }
+</script>
+</body>
+</html>
