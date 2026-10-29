@@ -30,6 +30,7 @@ export interface Action {
 
 export interface HandPlayer {
   hand_id: string;
+  room_id: string;
   player_id: string;
   player_display: string | null;
   seat: number | null;
@@ -38,11 +39,23 @@ export interface HandPlayer {
   won: number | null;
 }
 
+export interface StackEvent {
+  room_id: string;
+  player_id: string;
+  player_display: string | null;
+  event_type: 'buyin' | 'cashout' | 'sit_back' | 'quit' | 'admin_adjust';
+  amount: number | null;
+  old_stack: number | null;
+  new_stack: number | null;
+  ts: Date;
+}
+
 export interface ParsedHand {
   complete: boolean;
   hand?: Hand;
   actions?: Action[];
   players?: HandPlayer[];
+  stackEvents?: StackEvent[];
 }
 
 export interface RateLimitConfig {

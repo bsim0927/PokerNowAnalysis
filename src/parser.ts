@@ -276,6 +276,7 @@ export class LogParser {
 
       players.push({
         hand_id: handId!,
+        room_id: roomId,
         player_id: playerId,
         player_display: info.display,
         seat: info.seat,
