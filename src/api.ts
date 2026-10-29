@@ -163,6 +163,9 @@ const PROFIT_CTES = `
       sd.hand_id,
       COALESCE(SUM(
         CASE WHEN se.event_type IN ('cashout','quit') THEN -se.amount
+             -- standing up and sitting back re-uses the same stack (the 'joined' line that
+             -- follows is what puts it back), so sit_back moves no chips of its own
+             WHEN se.event_type IN ('sit_back','seat_approved') THEN 0
              ELSE se.amount
         END
       ), 0) AS net_adjustment
